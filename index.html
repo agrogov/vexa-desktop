@@ -92,16 +92,16 @@
 
     <!-- Notes vault workspace -->
     <div id="vault-view" class="vault-view hidden">
-      <aside class="vault-tree-col">
-        <div class="vault-tree-head">
-          <span class="brand"><img class="brand-logo" src="/src/assets/vexa-logo.svg" alt="" /> Notes</span>
+      <aside class="vault-tree-col" data-tauri-drag-region>
+        <div class="vault-tree-head" data-tauri-drag-region>
+          <span class="brand" data-tauri-drag-region><img class="brand-logo" data-tauri-drag-region src="/src/assets/vexa-logo.svg" alt="" /> Notes</span>
           <button id="vault-close" class="icon-btn" title="Back to meetings">✕</button>
         </div>
         <div id="vault-tree" class="vault-tree"></div>
       </aside>
       <section class="note-col">
-        <div class="note-head">
-          <span id="note-path" class="note-path">Select a note from the tree</span>
+        <div class="note-head" data-tauri-drag-region>
+          <span id="note-path" class="note-path" data-tauri-drag-region>Select a note from the tree</span>
           <div class="note-actions">
             <button id="note-edit" class="ghost-sm hidden">Edit</button>
             <button id="note-save" class="primary-sm hidden">Save</button>

@@ -366,6 +366,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 700;
 }
 .vault-tree-head .brand { font-size: 15px; }
+/* Overlay title bar: keep both header rows clear of the traffic lights and aligned. */
+body.mac .vault-tree-head, body.mac .note-head { box-sizing: border-box; min-height: 64px; padding-top: 30px; }
+.vault-tree-head .brand, .note-path { pointer-events: none; }
 .vault-tree { flex: 1; overflow-y: auto; padding: 8px; font-size: 13px; }
 .tree-item { padding: 4px 8px; border-radius: 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tree-item:hover { background: var(--panel-2); }
