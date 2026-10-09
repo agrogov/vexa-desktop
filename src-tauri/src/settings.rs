@@ -29,6 +29,9 @@ pub struct Settings {
     pub claude_model: String,
     /// Explicit path to the `claude` binary. Empty = auto-detect.
     pub claude_path: String,
+    /// Extra Claude Code tool permissions granted to the agent on top of the
+    /// built-in file tools, e.g. "WebSearch", "WebFetch", "Bash(git *)".
+    pub claude_allowed_tools: Vec<String>,
     /// Optional per-run spend cap passed to `claude --max-budget-usd`.
     pub max_budget_usd: Option<f64>,
 
@@ -49,12 +52,13 @@ impl Default for Settings {
             endpoint_url: "http://localhost:8083".to_string(),
             api_token: String::new(),
             language: String::new(),
+            whisper_model: "whisper-1".to_string(),
             capture_mic: true,
             capture_system: true,
             vault_path: String::new(),
-            whisper_model: "whisper-1".to_string(),
             claude_model: "sonnet".to_string(),
             claude_path: String::new(),
+            claude_allowed_tools: Vec::new(),
             max_budget_usd: None,
             capture_frames: true,
             frame_interval_secs: 5,

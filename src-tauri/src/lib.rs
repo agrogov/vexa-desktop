@@ -35,6 +35,8 @@ struct AppState {
     settings_path: PathBuf,
     settings: Mutex<Settings>,
     recorder: Mutex<Option<RecorderHandle>>,
+    /// Tool rules granted for the next Claude run only ("allow once").
+    once_tools: Mutex<Vec<String>>,
 }
 
 impl AppState {
@@ -153,6 +155,44 @@ struct VaultClaude {
     claude_version: Option<String>,
     claude_path: Option<String>,
     claude_error: Option<String>,
+}
+
+/// Persistent extra tool grants from Settings + any one-shot grants (consumed).
+fn tools_for_run(state: &AppState, s: &Settings) -> Vec<String> {
+    let mut v = s.claude_allowed_tools.clone();
+    v.extend(std::mem::take(&mut *state.once_tools.lock()));
+    v
+}
+
+/// Escalation: grant tool rules the agent was denied. `always` persists them in
+/// Settings; otherwise they apply to the next run only.
+#[tauri::command]
+fn grant_tools(state: State<AppState>, rules: Vec<String>, always: bool) -> Result<(), String> {
+    if always {
+        let mut s = { state.settings.lock().clone() };
+        for r in rules {
+            if !s.claude_allowed_tools.contains(&r) {
+                s.claude_allowed_tools.push(r);
+            }
+        }
+        settings::save(&state.settings_path, &s).map_err(|e| e.to_string())?;
+        *state.settings.lock() = s;
+    } else {
+        state.once_tools.lock().extend(rules);
+    }
+    Ok(())
+}
+
+/// Models the installed Claude Code actually offers (not a hardcoded list).
+#[tauri::command]
+async fn list_claude_models(state: State<'_, AppState>) -> Result<Vec<claude::ModelInfo>, String> {
+    let s = state.settings.lock().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let info = claude::detect(opt(&s.claude_path)).map_err(|e| e.to_string())?;
+        claude::list_models(&info.path).map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn opt(s: &str) -> Option<&str> {
@@ -299,6 +339,7 @@ fn story_update(
             model: "haiku".into(),
             resume_sid: None,
             max_budget: s.max_budget_usd,
+            extra_tools: tools_for_run(&state, &s),
             append_system: story_md,
             kind: "story".into(),
             persist: false,
@@ -497,6 +538,7 @@ fn update_meeting(app: AppHandle, state: State<AppState>, session_id: String) ->
             model: s.claude_model.clone(),
             resume_sid: resume,
             max_budget: s.max_budget_usd,
+            extra_tools: tools_for_run(&state, &s),
             append_system: agent_md,
             kind: "chat".into(),
             persist: true,
@@ -565,6 +607,7 @@ fn process_meeting(app: AppHandle, state: State<AppState>, session_id: String) -
             model: s.claude_model.clone(),
             resume_sid: resume,
             max_budget: s.max_budget_usd,
+            extra_tools: tools_for_run(&state, &s),
             append_system: agent_md,
             kind: "chat".into(),
             persist: true,
@@ -632,6 +675,7 @@ fn chat_send(
             model: s.claude_model.clone(),
             resume_sid: resume,
             max_budget: s.max_budget_usd,
+            extra_tools: tools_for_run(&state, &s),
             append_system: agent_md,
             kind: "chat".into(),
             persist: true,
@@ -956,6 +1000,7 @@ pub fn run() {
                 settings_path,
                 settings: Mutex::new(loaded),
                 recorder: Mutex::new(None),
+                once_tools: Mutex::new(Vec::new()),
             });
             Ok(())
         })
@@ -972,6 +1017,8 @@ pub fn run() {
             rename_session,
             delete_session,
             get_vault_status,
+            list_claude_models,
+            grant_tools,
             setup_vault,
             process_meeting,
             update_meeting,

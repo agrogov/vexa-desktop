@@ -71,6 +71,8 @@ pub struct RunOpts {
     pub model: String,
     pub resume_sid: Option<String>,
     pub max_budget: Option<f64>,
+    /// Extra tool permissions on top of the built-in file tools (settings + one-shot grants).
+    pub extra_tools: Vec<String>,
     /// Extra system prompt (the vault's `agent.md`), appended to Claude's default.
     pub append_system: Option<String>,
     /// Routing tag for UI events: "chat" (assistant panel) or "story" (story tab).
@@ -92,12 +94,135 @@ struct ToolEvent {
     name: String,
     file: Option<String>,
 }
+/// A tool call Claude Code refused because it wasn't permitted. The UI offers
+/// to grant `rule` (an `--allowedTools` entry) once or permanently.
+#[derive(Clone, Serialize, PartialEq)]
+pub struct Denial {
+    pub tool: String,
+    pub rule: String,
+    pub detail: String,
+}
 #[derive(Clone, Serialize)]
 struct ResultEvent {
     session: String,
     kind: String,
     text: String,
     cost_usd: Option<f64>,
+    denials: Vec<Denial>,
+}
+
+/// Turn a `permission_denials` entry into a grantable rule. Bash is narrowed to
+/// the command's first word (`Bash(git *)`) rather than all of Bash.
+fn denial_from(v: &Value) -> Option<Denial> {
+    let tool = v.get("tool_name")?.as_str()?.to_string();
+    let input = v.get("tool_input");
+    let get = |k: &str| input.and_then(|i| i.get(k)).and_then(|x| x.as_str());
+    let (rule, detail) = match tool.as_str() {
+        "Bash" => {
+            let cmd = get("command").unwrap_or("");
+            let first = cmd.split_whitespace().next().unwrap_or("");
+            let rule = if first.is_empty() { "Bash".to_string() } else { format!("Bash({first} *)") };
+            (rule, cmd.to_string())
+        }
+        "WebSearch" => (tool.clone(), get("query").unwrap_or("").to_string()),
+        "WebFetch" => (tool.clone(), get("url").unwrap_or("").to_string()),
+        _ => (
+            tool.clone(),
+            get("file_path").or_else(|| get("path")).unwrap_or("").to_string(),
+        ),
+    };
+    Some(Denial { tool, rule, detail })
+}
+
+const BASE_TOOLS: &[&str] = &["Read", "Write", "Edit", "Glob", "Grep"];
+
+/// Comma-joined `--allowedTools` value: built-in file tools + extras (deduped).
+fn allowed_tools_arg(extra: &[String]) -> String {
+    let mut v: Vec<String> = BASE_TOOLS.iter().map(|s| s.to_string()).collect();
+    for e in extra {
+        let e = e.trim();
+        if !e.is_empty() && !v.iter().any(|x| x == e) {
+            v.push(e.to_string());
+        }
+    }
+    v.join(",")
+}
+
+#[derive(Clone, Serialize)]
+pub struct ModelInfo {
+    pub value: String,
+    pub display_name: String,
+    pub description: String,
+    pub resolved: String,
+}
+
+/// Ask the installed Claude Code for the models it actually offers, via the
+/// stream-json control protocol (`initialize` → `models`). Same data `/model` shows.
+pub fn list_models(claude_path: &str) -> Result<Vec<ModelInfo>> {
+    use std::io::Write;
+    let mut cmd = Command::new(claude_path);
+    cmd.arg("-p")
+        .arg("--input-format")
+        .arg("stream-json")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    scrub_env(&mut cmd);
+    let mut child = cmd.spawn().context("launch claude for model list")?;
+    let mut stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
+    stdin.write_all(
+        b"{\"type\":\"control_request\",\"request_id\":\"vexa-models\",\"request\":{\"subtype\":\"initialize\"}}\n",
+    )?;
+    stdin.flush()?;
+    let stdout = child.stdout.take().ok_or_else(|| anyhow!("no stdout"))?;
+
+    // Read on a thread so a hung CLI can't block us past the timeout.
+    let (tx, rx) = std::sync::mpsc::channel::<Option<Value>>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(|l| l.ok()) {
+            if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
+                if v.get("type").and_then(|t| t.as_str()) == Some("control_response") {
+                    let _ = tx.send(Some(v));
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(None);
+    });
+    let resp = rx.recv_timeout(std::time::Duration::from_secs(25));
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    let v = resp
+        .map_err(|_| anyhow!("timed out waiting for Claude Code"))?
+        .ok_or_else(|| anyhow!("Claude Code exited without answering"))?;
+    let models = v
+        .pointer("/response/response/models")
+        .and_then(|m| m.as_array())
+        .ok_or_else(|| anyhow!("Claude Code returned no model list"))?;
+    let s = |m: &Value, k: &str| m.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let out: Vec<ModelInfo> = models
+        .iter()
+        .filter_map(|m| {
+            let value = s(m, "value");
+            if value.is_empty() {
+                return None;
+            }
+            Some(ModelInfo {
+                display_name: s(m, "displayName"),
+                description: s(m, "description"),
+                resolved: s(m, "resolvedModel"),
+                value,
+            })
+        })
+        .collect();
+    if out.is_empty() {
+        return Err(anyhow!("Claude Code returned an empty model list"));
+    }
+    Ok(out)
 }
 #[derive(Clone, Serialize)]
 struct ErrEvent {
@@ -211,9 +336,11 @@ fn run(app: &AppHandle, opts: &RunOpts) -> Result<()> {
         .arg("--permission-mode")
         .arg("acceptEdits")
         .arg("--allowedTools")
-        .arg("Read Write Edit Glob Grep")
-        .arg("--model")
-        .arg(&opts.model);
+        .arg(allowed_tools_arg(&opts.extra_tools));
+    // "default" = whatever Claude Code picks for this account; omit --model.
+    if !opts.model.is_empty() && opts.model != "default" {
+        cmd.arg("--model").arg(&opts.model);
+    }
     if let Some(sys) = &opts.append_system {
         if !sys.trim().is_empty() {
             cmd.arg("--append-system-prompt").arg(sys);
@@ -255,6 +382,7 @@ fn run(app: &AppHandle, opts: &RunOpts) -> Result<()> {
     let mut claude_sid: Option<String> = None;
     let mut final_text = String::new();
     let mut cost: Option<f64> = None;
+    let mut denials: Vec<Denial> = Vec::new();
 
     for line in reader.lines() {
         let line = match line {
@@ -328,6 +456,13 @@ fn run(app: &AppHandle, opts: &RunOpts) -> Result<()> {
                     .unwrap_or("")
                     .to_string();
                 cost = v.get("total_cost_usd").and_then(|c| c.as_f64());
+                if let Some(arr) = v.get("permission_denials").and_then(|d| d.as_array()) {
+                    for d in arr.iter().filter_map(denial_from) {
+                        if !denials.iter().any(|x| x.rule == d.rule) {
+                            denials.push(d);
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -369,6 +504,7 @@ fn run(app: &AppHandle, opts: &RunOpts) -> Result<()> {
             kind: opts.kind.clone(),
             text: final_text,
             cost_usd: cost,
+            denials,
         },
     );
     Ok(())
