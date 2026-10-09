@@ -161,6 +161,18 @@
         <label>Language (blank = auto-detect)
           <input id="set-language" type="text" placeholder="e.g. en, es, fr" />
         </label>
+        <label>Whisper model name
+          <input id="set-whisper" type="text" list="whisper-models" placeholder="whisper-1" />
+          <datalist id="whisper-models">
+            <option value="whisper-1"></option>
+            <option value="large-v3"></option>
+            <option value="large-v3-turbo"></option>
+            <option value="Systran/faster-whisper-large-v3"></option>
+            <option value="Systran/faster-whisper-medium"></option>
+            <option value="Systran/faster-whisper-small"></option>
+          </datalist>
+        </label>
+        <div class="hint">Sent as <code>model</code> to the transcription service. Use whatever name your server expects.</div>
         <label class="check"><input id="set-mic" type="checkbox" /> Capture microphone</label>
         <label class="check"><input id="set-system" type="checkbox" /> Capture system audio</label>
         <label class="check"><input id="set-frames" type="checkbox" /> Capture screen frames (for speaker naming)</label>
@@ -173,13 +185,21 @@
         </div>
         <div id="vault-status" class="hint"></div>
         <label>Claude model
-          <select id="set-model">
-            <option value="sonnet">sonnet (fast, cheap)</option>
-            <option value="opus">opus (richer)</option>
-            <option value="haiku">haiku (fastest)</option>
-          </select>
+          <div class="vault-row">
+            <select id="set-model"></select>
+            <button id="models-refresh" class="ghost" type="button" title="Reload the model list from Claude Code">↻</button>
+          </div>
         </label>
+        <div id="model-hint" class="hint"></div>
         <div id="claude-status" class="hint"></div>
+
+        <h3 class="subhead">Claude agent permissions</h3>
+        <div class="hint">The agent can always read/edit files in the vault. Grant more here — or approve on demand when it asks in the chat.</div>
+        <label class="check"><input id="set-perm-websearch" type="checkbox" /> Web search (<code>WebSearch</code>)</label>
+        <label class="check"><input id="set-perm-webfetch" type="checkbox" /> Fetch web pages (<code>WebFetch</code>)</label>
+        <label>Other allowed tools (one rule per line)
+          <textarea id="set-perm-other" rows="3" placeholder="Bash(git *)&#10;mcp__server__tool"></textarea>
+        </label>
 
         <div class="dialog-actions">
           <button id="settings-cancel" class="ghost">Cancel</button>

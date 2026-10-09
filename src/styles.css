@@ -53,6 +53,7 @@
 :root[data-theme="dark"] .dialog input[type="text"],
 :root[data-theme="dark"] .dialog input[type="password"],
 :root[data-theme="dark"] .dialog select,
+:root[data-theme="dark"] .dialog textarea,
 :root[data-theme="dark"] .chat-input textarea { background: var(--panel-2); }
 
 * { box-sizing: border-box; }
@@ -191,6 +192,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   background: var(--card); border: 1px solid var(--border); border-radius: 14px;
   padding: 22px; width: 460px; max-width: 90vw; display: flex; flex-direction: column; gap: 14px;
   box-shadow: 0 18px 50px rgba(0,0,0,0.18);
+  max-height: 90vh; overflow-y: auto;
 }
 .dialog h2 { margin: 0 0 4px; font-size: 17px; }
 .dialog label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
@@ -199,7 +201,25 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   background: #fbfbf8; border: 1px solid var(--border); color: var(--text);
   border-radius: 8px; padding: 9px 11px; font-size: 14px; outline: none;
 }
-.dialog input:focus { border-color: var(--accent); }
+.dialog input:focus, .dialog textarea:focus, .dialog select:focus { border-color: var(--accent); }
+.dialog textarea, .dialog select {
+  background: #fbfbf8; border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 9px 11px; font-size: 13px; outline: none; font-family: inherit;
+}
+.dialog select { flex: 1; min-width: 0; }
+.dialog textarea { resize: vertical; font-family: ui-monospace, monospace; }
+.dialog code { font: 12px ui-monospace, monospace; }
+
+/* Permission escalation card in the chat */
+.perm-card {
+  border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; margin: 8px 0;
+  background: var(--panel-2); font-size: 13px; display: flex; flex-direction: column; gap: 6px;
+}
+.perm-card.resolved { border-color: var(--border); opacity: 0.8; }
+.perm-title { font-weight: 600; }
+.perm-row { color: var(--muted); font: 12px ui-monospace, monospace; word-break: break-word; }
+.perm-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.perm-actions button:disabled { opacity: 0.5; cursor: default; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 .dialog-actions button { border-radius: 8px; padding: 9px 16px; font-size: 14px; cursor: pointer; border: 1px solid var(--border); }
 .dialog-actions .ghost { background: transparent; color: var(--text); }
@@ -475,6 +495,9 @@ button:focus-visible, .icon-btn:focus-visible { outline-offset: 1px; }
 /* Integrated macOS title bar: traffic lights float over a draggable topbar.
    Inset only on macOS (body.mac) so Win/Linux keep the standard frame. */
 body.mac .topbar { padding-left: 80px; }
+body.mac .sidebar { padding-top: 40px; }
+body.mac .brand { padding-left: 2px; }
+.topbar h1, .topbar .meta { pointer-events: none; }
 
 /* Shortcuts cheat-sheet */
 .shortcuts-grid { display: grid; grid-template-columns: auto 1fr; gap: 8px 18px; font-size: 13px; }
@@ -482,6 +505,3 @@ body.mac .topbar { padding-left: 80px; }
   font: 600 12px ui-monospace, monospace; background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px; white-space: nowrap;
 }
-body.mac .sidebar { padding-top: 40px; }
-body.mac .brand { padding-left: 2px; }
-.topbar h1, .topbar .meta { pointer-events: none; }

@@ -12,6 +12,8 @@ interface Settings {
   endpoint_url: string;
   api_token: string;
   language: string;
+  whisper_model: string;
+  claude_allowed_tools: string[];
   capture_mic: boolean;
   capture_system: boolean;
   vault_path: string;
@@ -24,7 +26,9 @@ interface Settings {
 interface ChatRow { role: string; text: string; created_at: string }
 interface DeltaEvent { session: string; kind: string; text: string }
 interface ToolEvent { session: string; kind: string; name: string; file: string | null }
-interface ResultEvent { session: string; kind: string; text: string; cost_usd: number | null }
+interface ResultEvent { session: string; kind: string; text: string; cost_usd: number | null; denials?: Denial[] }
+interface Denial { tool: string; rule: string; detail: string }
+interface ClaudeModel { value: string; display_name: string; description: string; resolved: string }
 interface ClaudeErrEvent { session: string; kind: string; message: string }
 interface VaultClaude {
   vault: { path: string; exists: boolean; adopted: boolean; ready: boolean } | null;
@@ -81,6 +85,7 @@ let timerHandle: number | undefined;
 let appSettings: Settings | null = null; // last-loaded settings (preserve on save)
 let streamingMsgEl: HTMLElement | null = null; // current streaming assistant bubble
 let claudeBusy = false;
+let lastAction: "chat" | "update" | "process" = "chat";
 // Live polishing: raw attributed turns get rewritten into a clean, attributed,
 // entity-highlighted "story" in place (one merged window).
 interface TurnLog { speaker: string; source: string; start: number; end: number; text: string; el: HTMLElement }
@@ -818,6 +823,62 @@ function setBusy(b: boolean) {
   ($("process-btn") as HTMLButtonElement).disabled = b || !viewSessionId;
   ($("chat-send") as HTMLButtonElement).disabled = b;
 }
+// Escalation: the agent was refused a tool. Let the user allow it (once or
+// always) and retry, instead of leaving them stuck.
+function addPermissionCard(denials: Denial[]) {
+  const c = $("chat");
+  const card = document.createElement("div");
+  card.className = "perm-card";
+  const title = document.createElement("div");
+  title.className = "perm-title";
+  title.textContent = "🔒 Claude needs permission";
+  card.appendChild(title);
+  for (const d of denials) {
+    const row = document.createElement("div");
+    row.className = "perm-row";
+    row.textContent = d.detail ? `${d.rule} — ${d.detail}` : d.rule;
+    card.appendChild(row);
+  }
+  const rules = denials.map((d) => d.rule);
+  const bar = document.createElement("div");
+  bar.className = "perm-actions";
+  const mk = (label: string, cls: string, fn: () => Promise<void> | void) => {
+    const b = document.createElement("button");
+    b.className = cls;
+    b.textContent = label;
+    b.onclick = async () => {
+      card.querySelectorAll("button").forEach((x) => ((x as HTMLButtonElement).disabled = true));
+      await fn();
+    };
+    bar.appendChild(b);
+  };
+  const retry = async (always: boolean) => {
+    try {
+      await invoke("grant_tools", { rules, always });
+    } catch (e) {
+      setChatStatus(`Couldn't grant permission: ${e}`, "error");
+      return;
+    }
+    if (always && appSettings) {
+      appSettings.claude_allowed_tools = [...new Set([...(appSettings.claude_allowed_tools ?? []), ...rules])];
+    }
+    card.classList.add("resolved");
+    bar.remove();
+    const note = document.createElement("div");
+    note.className = "perm-row";
+    note.textContent = always ? "Allowed (saved in Settings). Retrying…" : "Allowed for this retry. Retrying…";
+    card.appendChild(note);
+    if (lastAction === "update") await updateMeeting();
+    else if (lastAction === "process") await processMeeting();
+    else await runAgent(`I've now allowed ${rules.join(", ")}. Please retry my previous request.`, `Retry with ${rules.join(", ")}`);
+  };
+  mk("Allow once & retry", "primary-sm", () => retry(false));
+  mk("Always allow", "ghost-sm", () => retry(true));
+  mk("Deny", "ghost-sm", () => { card.remove(); });
+  card.appendChild(bar);
+  c.appendChild(card);
+  c.scrollTop = c.scrollHeight;
+}
 async function openInObsidian(file: string) {
   try {
     await invoke("open_in_obsidian", { file });
@@ -840,6 +901,7 @@ async function loadChat(sessionId: string) {
 }
 async function processMeeting() {
   if (!viewSessionId || claudeBusy) return;
+  lastAction = "process";
   setBusy(true);
   streamingMsgEl = null;
   setChatStatus("Processing meeting into your vault…", "working");
@@ -853,6 +915,7 @@ async function processMeeting() {
 // Send a message/instruction to the agent (shared by chat box + hot actions).
 async function runAgent(message: string, label?: string) {
   if (claudeBusy || !viewSessionId) return;
+  lastAction = "chat";
   addMsg("user", label ? `▶ ${label}` : message);
   setBusy(true);
   streamingMsgEl = null;
@@ -874,6 +937,7 @@ async function sendChat() {
 // "Update": live, proactive in-meeting note via the agent (agent.md persona).
 async function updateMeeting() {
   if (!viewSessionId || claudeBusy) return;
+  lastAction = "update";
   setBusy(true);
   streamingMsgEl = null;
   setChatStatus("Thinking…", "working");
@@ -934,11 +998,59 @@ async function openSettings() {
   ($("set-mic") as HTMLInputElement).checked = s.capture_mic;
   ($("set-system") as HTMLInputElement).checked = s.capture_system;
   ($("set-frames") as HTMLInputElement).checked = s.capture_frames;
-  ($("set-model") as HTMLSelectElement).value = s.claude_model || "sonnet";
+  ($("set-whisper") as HTMLInputElement).value = s.whisper_model || "whisper-1";
+  const tools = s.claude_allowed_tools ?? [];
+  ($("set-perm-websearch") as HTMLInputElement).checked = tools.includes("WebSearch");
+  ($("set-perm-webfetch") as HTMLInputElement).checked = tools.includes("WebFetch");
+  ($("set-perm-other") as HTMLTextAreaElement).value = tools
+    .filter((t) => t !== "WebSearch" && t !== "WebFetch")
+    .join("\n");
+  void loadModels(s.claude_model || "sonnet");
   ($("set-vault") as HTMLInputElement).value = s.vault_path;
   $("vault-choose").textContent = s.vault_path ? "Change…" : "Choose…";
   $("settings-overlay").classList.remove("hidden");
   refreshVaultUI();
+}
+function collectTools(): string[] {
+  const out: string[] = [];
+  if (($("set-perm-websearch") as HTMLInputElement).checked) out.push("WebSearch");
+  if (($("set-perm-webfetch") as HTMLInputElement).checked) out.push("WebFetch");
+  for (const l of ($("set-perm-other") as HTMLTextAreaElement).value.split("\n")) {
+    const t = l.trim();
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+// Fill the model dropdown with the models Claude Code itself reports.
+async function loadModels(selected: string) {
+  const sel = $("set-model") as HTMLSelectElement;
+  const hint = $("model-hint");
+  sel.disabled = true;
+  hint.textContent = "Loading models from Claude Code…";
+  hint.className = "hint";
+  let models: ClaudeModel[] = [];
+  try {
+    models = await invoke<ClaudeModel[]>("list_claude_models");
+    hint.textContent = `${models.length} models from Claude Code.`;
+    hint.className = "hint ok";
+  } catch (e) {
+    hint.textContent = `Couldn't load models from Claude Code (${e}). Showing aliases only.`;
+    hint.className = "hint error";
+    models = ["sonnet", "opus", "haiku"].map((v) => ({ value: v, display_name: v, description: "", resolved: "" }));
+  }
+  sel.innerHTML = "";
+  if (!models.some((m) => m.value === selected)) {
+    models.unshift({ value: selected, display_name: selected, description: "current setting", resolved: "" });
+  }
+  for (const m of models) {
+    const o = document.createElement("option");
+    o.value = m.value;
+    const name = m.display_name && m.display_name !== m.value ? `${m.display_name} — ${m.value}` : m.value;
+    o.textContent = m.description ? `${name} (${m.description})` : name;
+    sel.appendChild(o);
+  }
+  sel.value = selected;
+  sel.disabled = false;
 }
 function closeSettings() {
   $("settings-overlay").classList.add("hidden");
@@ -953,7 +1065,9 @@ async function saveSettings() {
     capture_mic: ($("set-mic") as HTMLInputElement).checked,
     capture_system: ($("set-system") as HTMLInputElement).checked,
     capture_frames: ($("set-frames") as HTMLInputElement).checked,
-    claude_model: ($("set-model") as HTMLSelectElement).value,
+    claude_model: ($("set-model") as HTMLSelectElement).value || base.claude_model || "sonnet",
+    whisper_model: ($("set-whisper") as HTMLInputElement).value.trim() || "whisper-1",
+    claude_allowed_tools: collectTools(),
   };
   try {
     await invoke("save_settings", { newSettings });
@@ -1327,6 +1441,7 @@ async function setupEvents() {
     const cost = e.payload.cost_usd != null ? ` · $${e.payload.cost_usd.toFixed(3)}` : "";
     setChatStatus(`Done${cost}.`, "");
     setTimeout(() => setChatStatus(""), 4000);
+    if (e.payload.denials?.length) addPermissionCard(e.payload.denials);
   });
   await listen<ClaudeErrEvent>("claude-error", (e) => {
     if (e.payload.session !== viewSessionId) return;
@@ -1506,6 +1621,7 @@ function wireUI() {
   installShortcuts();
   $("settings-cancel").onclick = closeSettings;
   $("settings-save").onclick = saveSettings;
+  $("models-refresh").onclick = () => loadModels(($("set-model") as HTMLSelectElement).value || appSettings?.claude_model || "sonnet");
   $("update-btn").onclick = updateMeeting;
   $("process-btn").onclick = processMeeting;
   $("chat-send").onclick = sendChat;
