@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "mac:dev": "tauri dev --features sck",
-    "mac:build": "tauri build --features sck"
+    "mac:build": "tauri build --features sck",
+    "mac:build:signed": "sh tools/mac-build-signed.sh"
   },
   "dependencies": {
     "@milkdown/crepe": "^7.21.2",
