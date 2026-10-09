@@ -14,6 +14,9 @@ pub struct Settings {
     pub api_token: String,
     /// Language hint (ISO code). Empty string = auto-detect.
     pub language: String,
+    /// Model name sent in the `model` form field of the transcription request
+    /// (e.g. "whisper-1", "large-v3", "Systran/faster-whisper-large-v3").
+    pub whisper_model: String,
     /// Capture the microphone.
     pub capture_mic: bool,
     /// Capture system audio (loopback / ScreenCaptureKit).
@@ -49,6 +52,7 @@ impl Default for Settings {
             capture_mic: true,
             capture_system: true,
             vault_path: String::new(),
+            whisper_model: "whisper-1".to_string(),
             claude_model: "sonnet".to_string(),
             claude_path: String::new(),
             max_budget_usd: None,

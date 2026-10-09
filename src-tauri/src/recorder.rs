@@ -209,6 +209,7 @@ pub fn start(
     let tcfg = TranscriptionConfig {
         base_url: settings.endpoint_url.clone(),
         api_token: settings.api_token.clone(),
+        model: settings.whisper_model.clone(),
         language: if settings.language.is_empty() {
             None
         } else {

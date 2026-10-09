@@ -21,6 +21,8 @@ pub struct TranscriptionConfig {
     pub api_token: String,
     /// Optional language hint (ISO code). Empty = auto-detect.
     pub language: Option<String>,
+    /// Model name for the `model` form field (empty = "whisper-1").
+    pub model: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -80,7 +82,14 @@ pub fn transcribe_chunk(
             .mime_str("audio/wav")?;
         let mut form = reqwest::blocking::multipart::Form::new()
             .part("file", part)
-            .text("model", "whisper-1")
+            .text(
+                "model",
+                if cfg.model.trim().is_empty() {
+                    "whisper-1".to_string()
+                } else {
+                    cfg.model.trim().to_string()
+                },
+            )
             .text("response_format", "verbose_json")
             .text("temperature", "0");
         if let Some(lang) = &cfg.language {
